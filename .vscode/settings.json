@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "fdm_2d,cpp": "cpp",
+        "iostream": "cpp"
+    }
+}
