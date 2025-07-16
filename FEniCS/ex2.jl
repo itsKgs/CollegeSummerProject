@@ -5,24 +5,24 @@ using PyCall
 const Point = pyimport("dolfin").Point
 
 # --- Physical constants ---
-k = 21.5
-ρ = 7910.0
+k = 1.0
+ρ = 1.0
 C_p = 505.0
-D = 1 / (ρ * C_p)
-a = 0.00042
-b = 0.000084
-c = 0.00003
+D = 1/(ρ * C_p)
+a = 0.01
+b = 0.01
+c = 0.005
 q = 200 * 0.3
-v = 0.08
+v = 0.5
 
 # --- Time stepping ---
-dt = 7.5e-5   
-time = 0.00375  
+dt = 0.05   
+time = 1.0  
 num_steps = Int(round(time / dt))
 
 # --- Domain and mesh ---
-nx, ny, nz = 100, 100, 100
-mesh = BoxMesh(Point(0.0, 0.0, 0.0), Point(0.0042, 0.00084, 0.0003), nx, ny, nz)
+nx, ny, nz = 20, 20, 20
+mesh = BoxMesh(Point(0.0, 0.0, 0.0), Point(1.0, 1.0, 0.5), nx, ny, nz)
 
 # --- Function space ---
 V = FunctionSpace(mesh, "P", 1)
@@ -35,7 +35,7 @@ function Q_expr(t)
     println("Solving at t = $t")
 
     Q = Expression(
-        "D * A * exp(-3*((pow(x[0]-vt,2)/a2) + (pow(x[1] - y0,2)/b2) + (pow(x[2],2)/c2)))",
+        "A * D * exp(-3*((pow(x[0] - vt,2)/a2) + (pow(x[1] - 0.5,2)/b2) + (pow(x[2],2)/c2)))",
         degree=3,
         A=(6 * sqrt(3) * q) / (a * b * c * π * sqrt(π)), 
         #A = q / (π^(3/2) * a * b * c),
@@ -43,10 +43,9 @@ function Q_expr(t)
         a2=a^2,
         b2=b^2,
         c2=c^2,
-        vt=v * t,
-        y0 = 0.00084/2
+        vt=v * t
     )
-    println(Q, v*t) #x[0], x[1], x[2], 
+    #println(Q, v*t) #x[0], x[1], x[2], 
     return Q
 end
 
@@ -66,8 +65,8 @@ a1 = lhs(F)
 L1 = rhs(F)
 
 # --- Time loop + output ---
-mkpath("mv_heat_source")
-vtkfile = File("mv_heat_source/solution.pvd")
+mkpath("example2")
+vtkfile = File("example2/solution.pvd")
 
 global t = 0.0
 for step = 1:num_steps

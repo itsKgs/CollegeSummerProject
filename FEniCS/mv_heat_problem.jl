@@ -18,16 +18,16 @@ v = 0.8
 P = 200.0
 
 # --- Time stepping ---
-dt = 3.75e-5   
+dt = 7.5e-5   
 time = 0.00375       # Final time (s) 3.75ms 
-num_steps = Int(round(time / dt)) # 100 step
+num_steps = Int(round(time / dt)) # 50 step
 
 # --- Domain and mesh ---
 Lx = 4.2e-3   # 4200 µm
 Ly = 8.4e-4   # 840 µm
 Lz = 3.0e-4   # 300 µm
 
-Nx, Ny, Nz = 84, 84, 60  # mesh resolution
+Nx, Ny, Nz = 120, 120, 100  # mesh resolution
 mesh = BoxMesh(Point(0.0, 0.0, 0.0), Point(Lx, Ly, Lz), Nx, Ny, Nz)
 
 # --- Function space ---
@@ -36,8 +36,9 @@ V = FunctionSpace(mesh, "P", 1)
 # --- Boundary condition: T = 300.0 everywhere ---
 #bc = DirichletBC(V, Constant(300.0), "on_boundary")
 
-surf = "near(x[2], 3.0e-4) || near(x[0], 0.0) || near(x[0], 4.2e-3) || near(x[1], 0.0) || near(x[1], 8.4e-4)"
-bc = DirichletBC(V, Constant(300.0), surf)
+
+#surf = "on_boundary && (near(x[2], 3.0e-4) || near(x[0], 0.0) || near(x[0], 4.2e-3) || near(x[1], 0.0) || near(x[1], 8.4e-4))"
+#bc = DirichletBC(V, Constant(300.0), surf)
 
 #@pydef mutable struct BCExpr <: fenics.SubDomain
 #    function inside(self, x, on_boundary)
@@ -57,9 +58,9 @@ function Q_expr(t)
     println("Solving at t = $t")
 
     Q = Expression(
-        "coef * D * exp(-1*(((pow(x[0]-vt,2) + pow(x[1]-y0,2))/sigma2) + (pow(x[2],2)/eps2)))",
+        "coef * D * exp(-1*(((pow(x[0]-vt,2) + pow(x[1] - y0,2))/sigma2) + (pow(x[2],2)/eps2)))",
         degree = 2,
-        coef = (A * P) / (2 * π * σ^2 * sqrt(2π * ε^2)), 
+        coef = (A * P) / (2 * π * σ^2 * sqrt(2 * π * ε^2)), 
         D = 1 / (ρ * C_p),
         sigma2 = 2 * (σ^2),
         eps2 = 2 * (ε^2),
@@ -97,7 +98,6 @@ for step = 1:num_steps
     Q_t = Q_expr(t)
     L = Q_t * T_test * dx + L1
 
-    #lvsolve(a1, L, T_new, bc)
     lvsolve(a1, L, T, bc, solver_parameters=Dict("linear_solver" => "cg", "preconditioner" => "ilu"))
 
 
