@@ -1,5 +1,6 @@
 using MethodOfLines, NeuralPDE, Lux, OptimizationOptimJL, ModelingToolkit, DomainSets, OptimizationOptimisers, Optimization
-using Plots, LineSearches
+using Plots, LineSearches, Optimisers
+using LuxCUDA, Random, ComponentArrays
 
 @parameters x y t
 @variables u(..) v(..) p(..)
@@ -62,10 +63,17 @@ bcs = [
 
 # Neural network
 chain = Chain(
-    Dense(3, 64, tanh),
-    Dense(64, 64, tanh),
-    Dense(64, 3)
+    Dense(3, 10, tanh),
+    Dense(10, 10, tanh),
+    Dense(10, 3)
 )
+
+#chain = Chain(
+#    Dense(3, 10, tanh), Dropout(0.1),
+#    Dense(10, 10, tanh), Dropout(0.1),
+#    Dense(10, 10, tanh), Dropout(0.1),
+#    Dense(10, 3)
+#)
 
 dx = 0.05
 dy = 0.05
@@ -74,7 +82,12 @@ dt = 0.05
 
 #strategy = QuadratureTraining(; batch=200, abstol=1e-6, reltol=1e-6)
 strategy = GridTraining([dx, dy, dt])
-discretization = PhysicsInformedNN(chain, strategy)
+
+const gpud = gpu_device()
+ps = Lux.setup(Random.default_rng(), chain)[1]
+ps = ps |> ComponentArray |> gpud .|> Float64
+
+discretization = PhysicsInformedNN(chain, strategy; init_params = ps)
 
 prob = discretize(pdesys, discretization)
 
@@ -86,12 +99,36 @@ callback = function (p, l)
     return false
 end
 
+opt = OptimizationOptimisers.ADAM(0.01)  # Initial LR
+#opt_state = OptimizationOptimisers.setup(opt, prob.f.f, prob.u0)
+
+maxiters = 100
+decay_every = 500
+decay_factor = 0.5
+
+global iter = 0
+function scheduled_callback(p, loss)
+    global iter += 1
+    println("Iteration: $iter, loss: $loss")
+
+    #if iter % decay_every == 0
+    #    println("Decaying LR at iteration $iter")
+    #    Optimisers.adjust!(opt_state, eta = opt_state.opt.eta * decay_factor)
+    #end
+    return false
+end
+
+res1 = Optimization.solve(prob, opt; callback = scheduled_callback, maxiters=maxiters)
+
+prob = remake(prob, u0 = res1.u)
+opt2 = LBFGS(linesearch = BackTracking())
+res2 = Optimization.solve(prob, opt2; callback = callback, maxiters = 50)
 
 opt = OptimizationOptimJL.BFGS()
 #opt = LBFGS(linesearch = BackTracking())
 #opt = OptimizationOptimisers.ADAM(0.01)
 
-res = Optimization.solve(prob, opt; maxiters = 500, callback)
+#res = Optimization.solve(prob, opt; maxiters = 500, callback)
 
 #opt2 = LBFGS()
 #res2 = Optimization.solve(prob, opt2; maxiters=500, u0=res1.u)
@@ -105,13 +142,13 @@ xs = ys = range(0.0, 1.0; length=50)  # spatial grid
 ts = range(0.0, 1.0; length=20)       # time steps for animation
 
 # Predict u, v, and p at Each (x, y, t)
-function predict_field(phi, res, xs, ys, t)
-    u_vals = [phi([x, y, t], res.u)[1] for x in xs, y in ys]
-    v_vals = [phi([x, y, t], res.u)[2] for x in xs, y in ys]
-    p_vals = [phi([x, y, t], res.u)[3] for x in xs, y in ys]
+function predict_field(phi, res1, xs, ys, t)
+    u_vals = [phi([x, y, t], res1.u)[1] for x in xs, y in ys]
+    v_vals = [phi([x, y, t], res1.u)[2] for x in xs, y in ys]
+    p_vals = [phi([x, y, t], res1.u)[3] for x in xs, y in ys]
     return u_vals, v_vals, p_vals
 end
-u_vals, v_vals, p_vals = predict_field(phi, res, xs, ys, 0.5)
+u_vals, v_vals, p_vals = predict_field(phi, res1, xs, ys, 0.5)
 u_vals
 v_vals
 p_vals

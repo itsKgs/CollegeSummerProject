@@ -14,7 +14,7 @@ V(x) = 0.0
 
 # 2. PDE system
 eqs = [
-   im * Dt(ψ(t, x)) ~ -Dxx(ψ(t, x)) + V(x)*ψ(t, x)
+   im * Dt(ψ(t, x)) ~ Dxx(ψ(t, x)) + V(x)*ψ(t, x)
 ]
 
 # 3. Domains
@@ -24,14 +24,14 @@ domains = [
 ]
 
 # 4. Initial conditions
-ψ0 = x -> sin(2*π*x) + 0im
+ψ0 = x -> sin(2*π*x) 
 
 # 5. Boundary and initial conditions 
 bcs = [
-    ψ(0, x) ~ sin(2*π*x) + 0im,
+    ψ(0, x) ~  ψ0(x),
 
-    ψ(t, 0) ~ 0.0 + 0im,
-    ψ(t, 1) ~ 0.0 + 0im
+    ψ(t, 0) ~ 0.0,
+    ψ(t, 1) ~ 0.0
 ]
 
 @named pdesys = PDESystem(eqs, bcs, domains, [t, x], [ψ(t, x)])

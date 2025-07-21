@@ -1,7 +1,7 @@
 using NeuralPDE, ModelingToolkit, DomainSets
 using Lux, Optimization, OptimizationOptimJL, OptimizationOptimisers
 using Plots
-using CUDA, LuxCUDA, Functors
+using LuxCUDA, Random, ComponentArrays
 
 @parameters x y z t
 @variables T(..)
@@ -79,8 +79,12 @@ dz = 0.025
 dt = 0.05
 strategy = GridTraining([dx, dy, dz, dt])
 
-discretization = PhysicsInformedNN(chain, strategy)
+ps = Lux.setup(Random.default_rng(), chain)[1]
+ps = ps |> ComponentArray |> gpud .|> Float64
+
+discretization = PhysicsInformedNN(chain, strategy; init_params = ps)
 prob = discretize(pdesys, discretization)
+symprob = symbolic_discretize(pdesys, discretization)
 
 #Callback function
 global  iter = 0
@@ -94,7 +98,7 @@ opt1 = OptimizationOptimisers.Adam(0.001)
 res1 = Optimization.solve(prob, opt1; callback=callback, maxiters=1000)
 
 opt = Optim.LBFGS()
-res = Optimization.solve(prob, opt; callback, maxiters = 30)
+res = Optimization.solve(prob, opt; callback, maxiters = 1500)
 
 
 phi = discretization.phi

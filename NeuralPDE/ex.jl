@@ -1,6 +1,7 @@
 using NeuralPDE, ModelingToolkit, DomainSets
 using Lux, Optimization, OptimizationOptimJL, OptimizationOptimisers
 using Plots
+using LuxCUDA, Random, ComponentArrays
 
 @parameters x y z t
 @variables T(..)
@@ -76,8 +77,13 @@ dz = 0.025
 dt = 0.05
 strategy = GridTraining([dx, dy, dz, dt])
 
-discretization = PhysicsInformedNN(chain, strategy)
+const gpud = gpu_device()
+ps = Lux.setup(Random.default_rng(), chain)[1]
+ps = ps |> ComponentArray |> gpud .|> Float64
+
+discretization = PhysicsInformedNN(chain, strategy; init_params = ps)
 prob = discretize(pdesys, discretization)
+symprob = symbolic_discretize(pdesys, discretization)
 
 #Callback function
 global  iter = 0
@@ -100,11 +106,12 @@ xs = range(0.0, 1.0, length=50)
 ys = range(0.0, 1.0, length=50)
 ts = range(0.0, 1.0, length=30)
 zs = 0.1
-T_pred = [phi([x, y, 0.1, 0.1], res.u)[1] for x in xs, y in ys]
+T_pred = [first(Array(phi([x, y, 0.1, 0.1], res.u)))[1] for x in xs for y in ys]
+
 
 
 anim_T = @animate for t in ts
-    T_pred = [phi([x, y, zs, t], res.u)[1] for x in xs, y in ys]
+    T_pred = [first(Array(phi([x, y, zs, t], res.u)))[1] for x in xs for y in ys]
     heatmap(xs, ys, T_pred',
         xlabel="x", ylabel="y",
         title="T(x, y, z=$(round(zs, digits=2)), t=$(round(t, digits=2)))",
@@ -113,6 +120,29 @@ anim_T = @animate for t in ts
 end
 
 gif(anim_T, "pinn_heatmap_z$(round(zs, digits=2)).gif", fps=5)
+
+zs = 0.1
+using Printf 
+anim_T = @animate for t in ts
+    T_pred = [first(Array(phi([x, y, zs, t], res.u))) for x in xs for y in ys]
+    title= @sprintf("T(x, y, z=%.2f, t=%.2f)", zs, t)
+    plot(xs, ys, T_pred, st = :surface, label = "", title = title) 
+end
+gif(anim_T, "pinn_surface_z$(round(zs, digits=2)).gif", fps=5)
+
+using Printf  # ← Add this at the top of your file
+
+zs = 0.1
+anim_T = @animate for t in ts
+    T_pred = [first(Array(phi([x, y, zs, t], res.u))) for x in xs, y in ys]
+    ttl = @sprintf("T(x, y, z=%.2f, t=%.2f)", zs, t)
+    surface(xs, ys, reshape(T_pred, :, length(ys)),
+            xlabel="x", ylabel="y", zlabel="T",
+            title=ttl, c=:thermal, legend=false)
+end
+
+gif(anim_T, "pinn_surface_z$(round(zs, digits=2)).gif", fps=5)
+
 
 zs = 0.2
 anim_T = @animate for t in ts
