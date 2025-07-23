@@ -49,12 +49,12 @@ bcs = [
 
 # Neural network
 chain = Chain(
-    Dense(2, 100, tanh),
-    Dense(100, 100, tanh),
-    Dense(100, 100, tanh),
-    Dense(100, 100, tanh),
-    Dense(100, 100, tanh),
-    Dense(100, 2)
+    Dense(2, 64, tanh),
+    Dense(64, 64, tanh),
+    #Dense(100, 100, tanh),
+    #Dense(100, 100, tanh),
+    #Dense(100, 100, tanh),
+    Dense(64, 2)
 )
 
 dx = 0.04   
@@ -74,8 +74,11 @@ discretization = PhysicsInformedNN(chain, strategy) #; init_params=ps
 prob = discretize(pdesys, discretization)
 symprob = symbolic_discretize(pdesys, discretization)
 
+optim = Optimization.OptimizationFunction(prob.f, Optimization.AutoZygote())
+optprob = Optimization.OptimizationProblem(optim, prob.u0)
+
 # Print initial loss
-initial_loss = prob.f(prob.u0, nothing)
+initial_loss = optprob.f(prob.u0, nothing)
 println("Initial loss = ", initial_loss)
 
 pde_inner_loss_functions = symprob.loss_functions.pde_loss_functions
@@ -98,12 +101,14 @@ callback = function (p, l)
 end
 
 opt1 = OptimizationOptimisers.Adam(1e-3)
-res1 = Optimization.solve(prob, opt1; callback=callback, maxiters=500)
+res1 = Optimization.solve(prob, opt1; callback=callback, maxiters=100)
+
+res = Optimization.solve(optprob, Optim.BFGS(); callback=callback, maxiters=3000)
 
 plot(1:length(losses), losses, xlabel="Iteration", ylabel="Loss", title="Training Loss")
 
 
-prob = remake(prob, u0 = res1.u)
+prob = remake(prob, u0 = res.u)
 global  iter = 0
 losses = Float64[]
 opt = OptimizationOptimJL.LBFGS()
@@ -113,7 +118,7 @@ plot(1:length(losses), losses, xlabel="Iteration", ylabel="Loss", title="Trainin
 
 phi = discretization.phi
 # Extract trained params
-trained_params = res1.u
+trained_params = res.u
 #trained_params = res.u |> cpu_device()
 
 using MAT
@@ -125,18 +130,21 @@ t_data = mat_data["tt"]   # time points
 t_vec = vec(t_data)  # ensure it's a vector
 u_data = mat_data["uu"]   # solution matrix (size: length(t) × length(x))
 
-#discrete_x = range(-5.0, 5.0, length=256)
-#discrete_t = range(0.0, π/2, length=159)
+discrete_x = range(-5.0, 5.0, length=256)
+discrete_t = range(0.0, π/2, length=159)
 
 Nx = length(x_vec)
 Nt = length(t_vec)
 
-# Allocate arrays (time-major: Nt × Nx)
-U_pred = zeros(Float64, Nx, Nt)
-V_pred = zeros(Float64, Nx, Nt)
+Nxx = length(discrete_x)
+Ntt = length(discrete_t)
 
-for (ti, tt) in enumerate(t_vec)
-    for (xi, xx) in enumerate(x_vec)
+# Allocate arrays (time-major: Nt × Nx)
+U_pred = zeros(Float64, Nxx, Ntt)
+V_pred = zeros(Float64, Nxx, Ntt)
+
+for (ti, tt) in enumerate(discrete_t)
+    for (xi, xx) in enumerate(discrete_x)
         uv = phi([xx, tt], trained_params)
         U_pred[xi, ti] = uv[1]
         V_pred[xi, ti] = uv[2]
@@ -158,11 +166,11 @@ absu_data = abs.(u_data)  # absolute values of the solution
 
 mkpath("PINN/Scrödinger equation")
 
-anim = @animate for i in eachindex(t_vec)
-    plot(x_vec, absψ_pred[:, i], label="|ψ(t=$(t_vec[i]), x)|", xlabel="x", ylabel="|ψ|",
-         title="Time: $(t_vec[i])", legend=:topright)
-    plot!(x_vec, absu_data[:, i], label="|ψ_data(t=$(t_vec[i]), x)|", xlabel="x", ylabel="|ψ|",
-             title="Time: $(t_vec[i])", legend=:topright)
+anim = @animate for i in eachindex(discrete_t)
+    plot(discrete_x, absψ_pred[:, i], label="|ψ(t=$(discrete_t[i]), x)|", xlabel="x", ylabel="|ψ|",
+         title="Time: $(discrete_t[i])", legend=:topright)
+    #plot!(x_vec, absu_data[:, i], label="|ψ_data(t=$(t_vec[i]), x)|", xlabel="x", ylabel="|ψ|",
+            # title="Time: $(t_vec[i])", legend=:topright)
 end
 gif(anim, "PINN/Scrödinger equation/schrodinger_abs_N_PDE.gif", fps = 3)
 
