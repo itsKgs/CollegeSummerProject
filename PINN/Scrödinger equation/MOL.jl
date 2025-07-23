@@ -56,7 +56,7 @@ bcs = [
 @named pdesys = PDESystem(eqs, bcs, domains, [t, x], [u(t, x), v(t, x)])
 
 # 5. Discretize using MethodOfLines (MOL)
-N=50
+N=256
 @time discretization = MOLFiniteDifference([x => N], t, approx_order=2)
 
 @time prob = discretize(pdesys, discretization)
@@ -75,11 +75,24 @@ discrete_ψ = discrete_u + im * discrete_v
 
 absψ = abs.(discrete_ψ)
 
+mat_data = matread("C:\\Users\\kunwa\\Documents\\Programming\\Julia\\PINN\\Scrödinger equation\\NLS.mat")
+x_data = mat_data["x"]  # spatial grid
+x_vec = vec(x_data)  # ensure it's a vector
+
+t_data = mat_data["tt"]   # time points
+t_vec = vec(t_data)  # ensure it's a vector
+
+u_data = mat_data["uu"]   # solution matrix (size: length(t) × length(x))
+absu_data = abs.(u_data)  # absolute values of the solution
+
+
+mkpath("PINN/Scrödinger equation")
+
 anim = @animate for i in eachindex(discrete_t)
     plot(discrete_x, absψ[i, :], label="|ψ(t=$(discrete_t[i]), x)|", xlabel="x", ylabel="|ψ|",
          title="Time: $(discrete_t[i])", legend=:topright)
 end
-gif(anim, "schrodinger_abs.gif", fps = 2)
+gif(anim, "PINN/Scrödinger equation/schrodinger_abs_MOL.gif", fps = 2)
 
 τ = 0.79
 i = findmin(abs.(discrete_t .- τ))[2]  # nearest saved time index
@@ -88,6 +101,7 @@ plot(discrete_x, absψ[i, :];
      title="t ≈ $(round(discrete_t[i], digits=3))",
      label="|ψ|")
 
+savefig("PINN/Scrödinger equation/schrodinger_abs_MOL_τ$(round(τ, digits=2)).png") 
 # Precompute the heatmap matrix
 ψ_abs = abs.(discrete_ψ)
 
@@ -100,3 +114,5 @@ heatmap(
     color = :blues,          # similar colormap
     aspect_ratio = :auto
 )
+
+savefig("PINN/Scrödinger equation/schrodinger_abs_heatmap_MOL.png")
