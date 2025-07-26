@@ -58,7 +58,7 @@ chain = Chain(
     Dense(20, 20, tanh),
     Dense(20, 20, tanh),
     Dense(20, 20, tanh),
-    Dense(20, 2)
+    Dense(20, 3)
 )
 
 #chain = Chain(
@@ -68,58 +68,69 @@ chain = Chain(
 #    Dense(10, 3)
 #)
 
-dx = 0.05
-dy = 0.05
+dx = 0.04
+dy = 0.04
 
 #strategy = QuadratureTraining(; batch=200, abstol=1e-6, reltol=1e-6)
 strategy = GridTraining([dx, dy])
 
-const gpud = gpu_device()
-ps = Lux.setup(Random.default_rng(), chain)[1]
-ps = ps |> ComponentArray |> gpud .|> Float64
+#const gpud = gpu_device()
+#ps = Lux.setup(Random.default_rng(), chain)[1]
+#ps = ps |> ComponentArray |> gpud .|> Float64
 
-discretization = PhysicsInformedNN(chain, strategy; init_params = ps)
-
+discretization = PhysicsInformedNN(chain, strategy) #; init_params=ps
 prob = discretize(pdesys, discretization)
+symprob = symbolic_discretize(pdesys, discretization)
+
+optim = Optimization.OptimizationFunction(prob.f, Optimization.AutoZygote())
+optprob = Optimization.OptimizationProblem(optim, prob.u0)
+
+# Print initial loss
+initial_loss = optprob.f(optprob.u0, nothing)
+println("Initial loss = ", initial_loss)
+
+pde_inner_loss_functions = symprob.loss_functions.pde_loss_functions
+bcs_inner_loss_functions = symprob.loss_functions.bc_loss_functions
 
 #Callback function
 global  iter = 0
+losses = Float64[]
 callback = function (p, l)
-    global iter =  iter + 1
-    println("Iteration: $iter, loss is: $l")
-    return false
-end
-
-opt = OptimizationOptimisers.ADAM(0.01)  # Initial LR
-#opt_state = OptimizationOptimisers.setup(opt, prob.f.f, prob.u0)
-
-maxiters = 100
-#decay_every = 500
-#decay_factor = 0.5
-
-global iter = 0
-function scheduled_callback(p, loss)
     global iter += 1
-    println("Iteration: $iter, loss: $loss")
 
-    #if iter % decay_every == 0
-    #    println("Decaying LR at iteration $iter")
-    #    Optimisers.adjust!(opt_state, eta = opt_state.opt.eta * decay_factor)
-    #end
+    #println("pde_losses: ", map(l_ -> l_(p.u), pde_inner_loss_functions))
+    #println("bcs_losses: ", map(l_ -> l_(p.u), bcs_inner_loss_functions))
+    println("Iteration: $iter, loss is: $l")
+
+    # Print every 100 iterations
+    if iter % 100 == 0
+        push!(losses, l)
+        #println("Iteration: $iter, loss is: $l")
+        # Optional: print PDE and BC losses here if needed
+        # println("pde_losses: ", map(l_ -> l_(p.u), pde_inner_loss_functions))
+        # println("bcs_losses: ", map(l_ -> l_(p.u), bcs_inner_loss_functions))
+    end
+
     return false
 end
 
-res1 = Optimization.solve(prob, opt; callback = scheduled_callback, maxiters=maxiters)
+opt1 = OptimizationOptimisers.Adam(1e-3)
+res1 = Optimization.solve(optprob, opt1; callback=callback, maxiters=10000)
 
-prob = remake(prob, u0 = res1.u)
-opt2 = LBFGS(linesearch = BackTracking())
-res2 = Optimization.solve(prob, opt2; callback = callback, maxiters = 50)
+#res = Optimization.solve(optprob, Optim.BFGS(); callback=callback, maxiters=10000)
 
-opt = OptimizationOptimJL.BFGS()
-#opt = LBFGS(linesearch = BackTracking())
-#opt = OptimizationOptimisers.ADAM(0.01)
+plot(1:length(losses), losses, xlabel="Iteration", ylabel="Loss", title="Training Loss")
 
-#res = Optimization.solve(prob, opt; maxiters = 500, callback)
+global  iter = 0
+losses = Float64[]
+prob1 = remake(optprob, u0 = res1.u)
+#opt2 = LBFGS(linesearch = BackTracking())
+res2 = Optimization.solve(prob1, Optim.BFGS(); callback = callback, maxiters = 10000)
+plot(1:length(losses), losses, xlabel="Iteration", ylabel="Loss", title="Training Loss")
+
+prob2 = remake(optprob, u0 = res2.u)
+opt = LBFGS(linesearch = BackTracking())
+res = Optimization.solve(prob2, opt; maxiters = 5000, callback)
 
 #opt2 = LBFGS()
 #res2 = Optimization.solve(prob, opt2; maxiters=500, u0=res1.u)
@@ -129,118 +140,174 @@ mkpath("NeuralPDE/Navier_stokes_channel")
 
 phi = discretization.phi  # the neural network that maps (x, y, t) → [u, v, p]
 
-xs = ys = range(0.0, 1.0; length=50)  # spatial grid
-ts = range(0.0, 1.0; length=20)       # time steps for animation
 
-# Predict u, v, and p at Each (x, y, t)
-function predict_field(phi, res1, xs, ys, t)
-    u_vals = [phi([x, y, t], res1.u)[1] for x in xs, y in ys]
-    v_vals = [phi([x, y, t], res1.u)[2] for x in xs, y in ys]
-    p_vals = [phi([x, y, t], res1.u)[3] for x in xs, y in ys]
-    return u_vals, v_vals, p_vals
-end
-u_vals, v_vals, p_vals = predict_field(phi, res1, xs, ys, 0.5)
-u_vals
-v_vals
-p_vals
+## Plot solution
+#xs = ys = range(0, 1, length=50)
+#xv, yv = [x for x in xs], [y for y in ys]
+#u_vals = [first(phi([x, y], res2.u)) for x in xs, y in ys]
+#v_vals = [phi([x, y], res2.u)[2] for x in xs, y in ys]
+#
+## Quiver Plot
+#heatmap(xs, ys, u_vals', xlabel="x", ylabel="y", title="U velocity", color=:viridis)
 
-# pressure
-anim = @animate for t in ts
-    u_vals, v_vals, p_vals = predict_field(phi, res, xs, ys, t)
-    p_pred = reshape(p_vals, length(xs), length(ys))
-    heatmap(
-        xs, ys, p_pred',
-        xlabel = "x", ylabel = "y",
-        title = "Pressure at t = $(round(t, digits=2))",
-        clims = (minimum(p_vals), maximum(p_vals)),
-        c = :thermal, aspect_ratio = 1
-    )
-end
+# Create a grid for plotting
+nx, ny = 30, 30
+xs = range(0, 1, length=nx)
+ys = range(0, 1, length=ny)
 
-gif(anim, "NeuralPDE/Navier_stokes_channel/navier_stokes_pressure_heatmap.gif", fps=5)
+xv = repeat(xs, inner=ny)
+yv = repeat(ys, outer=nx)
+#println("xv: ", xv)
+#println("yv: ", yv)
 
-# u(x, y, t)
-anim_u = @animate for t in ts
-    u_vals, v_vals, p_vals = predict_field(phi, res, xs, ys, t)
-    u_pred = reshape(u_vals, length(xs), length(ys))
-    heatmap(xs, ys, u_pred',
-        xlabel="x", ylabel="y",
-        title="u-component Velocity at t = $(round(t, digits=2))",
-        c=:blues, clims = (minimum(u_vals), maximum(u_vals)), size=(800, 600) 
-    )  
-end
+# First plot the grid points
+p = scatter(xv, yv, markersize=1.5, label="", title="Velocity Field (Grid + Quiver)",
+            xlabel="x", ylabel="y", aspect_ratio=1, size=(800, 800))
 
-gif(anim_u, "NeuralPDE/Navier_stokes_channel/velocity_u_component_heatmap.gif", fps=1)
+# Evaluate velocity at each grid point
+u_vals = [first(phi([x, y], res2.u)) for (x, y) in zip(xv, yv)]
+v_vals = [phi([x, y], res2.u)[2] for (x, y) in zip(xv, yv)]
 
 
-# Surface Animation for u(x, y, t)
-anim_u = @animate for t in ts
-    u_vals, v_vals, p_vals = predict_field(phi, res, xs, ys, t)
-    u_pred = reshape(u_vals, length(xs), length(ys))
-    surface(xs, ys, u_pred',
-        xlabel="x", ylabel="y", zlabel="u(x,y)",
-        title="u-component Velocity at t = $(round(t, digits=2))",
-        c=:blues, clims = (minimum(u_vals), maximum(u_vals)), size=(800, 600)
-    )  
-end
+# Reshape into matrices for quiver
+u_mat = reshape(u_vals, ny, nx)
+v_mat = reshape(v_vals, ny, nx)
 
-gif(anim_u, "NeuralPDE/Navier_stokes_channel/velocity_u_component.gif", fps=1)
+scale_factor = 0.09  # Adjust as needed
 
-# v(x, y, t)
-anim_u = @animate for t in ts
-    u_vals, v_vals, p_vals = predict_field(phi, res, xs, ys, t)
-    v_pred = reshape(v_vals, length(xs), length(ys))
-    heatmap(xs, ys, v_pred',
-        xlabel="x", ylabel="y",
-        title="u-component Velocity at t = $(round(t, digits=2))",
-        c=:blues, clims = (minimum(u_vals), maximum(u_vals)), size=(800, 600) 
-    )  
-end
+u_mat_scaled = u_mat .* scale_factor
+v_mat_scaled = v_mat .* scale_factor
 
-gif(anim_u, "NeuralPDE/Navier_stokes_channel/velocity_v_component_heatmap.gif", fps=1)
+# Plot heatmap of speed
+# Compute speed (magnitude of velocity)
+#speed_mat = sqrt.(u_mat.^2 .+ v_mat.^2)
+#
+#p = heatmap(xs, ys, speed_mat, color=:plasma, colorbar=true,
+#            xlabel="x", ylabel="y", title="Velocity Magnitude + Quiver", size=(800, 800),
+#            aspect_ratio=1)
+#
+#
+# Overlay the quiver plot
+quiver(p, xv, yv, quiver=(u_mat, v_mat), color=:blue, label="",
+       quiver_width=0.002, quiver_headwidth=0.01, quiver_headlength=0.00002, quiver_alpha=0.8)
 
-
-# Surface Animation for v(x, y, t)
-anim_u = @animate for t in ts
-    u_vals, v_vals, p_vals = predict_field(phi, res, xs, ys, t)
-    v_pred = reshape(v_vals, length(xs), length(ys))
-    surface(xs, ys, v_pred',
-        xlabel="x", ylabel="y", zlabel="u(x,y)",
-        title="u-component Velocity at t = $(round(t, digits=2))",
-        c=:blues, clims = (minimum(u_vals), maximum(u_vals)), size=(800, 600)
-    )  
-end
-
-gif(anim_u, "NeuralPDE/Navier_stokes_channel/velocity_v_component.gif", fps=1)
+# Display the plot
+display(p)
 
 
-#Surface Animation of Velocity Magnitude
-function predict_velocity_magnitude(phi, res, xs, ys, t)
-    [sqrt(phi([x, y, t], res.u)[1]^2 + phi([x, y, t], res.u)[2]^2) for x in xs, y in ys]
-end
 
-anim_mag = @animate for t in ts
-    mag = predict_velocity_magnitude(phi, res, xs, ys, t)
-    mag_pred = reshape(mag, length(xs), length(ys))
-    surface(xs, ys, mag_pred',
-        xlabel="x", ylabel="y", zlabel="|u(x,y)|",
-        title="Velocity Magnitude at t = $(round(t, digits=2))",
-        c=:plasma, clims=(0, 1.5), size=(800, 600),
-    )
-end
-
-gif(anim_mag, "NeuralPDE/Navier_stokes_channel/velocity_surface.gif", fps=5)
-
-# Quiver Plot Animation (Velocity Vector Field)
-anim = @animate for t in ts
-    u_vals, v_vals, p_vals = predict_field(phi, res, xs, ys, t)
-    u_pred = reshape(u_vals, length(xs), length(ys))
-    v_pred = reshape(v_vals, length(xs), length(ys))
-    quiver(xs, ys, quiver=(u_pred', v_pred'),
-        xlabel="x", ylabel="y",
-        title="Velocity Field at t = $(round(t, digits=2))",
-        aspect_ratio=1, linealpha=0.8, size=(700, 600)
-    )
-end
-
-gif(anim, "NeuralPDE/Navier_stokes_channel/velocity_quiver.gif", fps=1)
+#xs = ys = range(0.0, 1.0; length=50)  # spatial grid
+#ts = range(0.0, 1.0; length=20)       # time steps for animation
+#
+## Predict u, v, and p at Each (x, y, t)
+#function predict_field(phi, res2, xs, ys, t)
+#    u_vals = [phi([x, y, t], res2.u)[1] for x in xs, y in ys]
+#    v_vals = [phi([x, y, t], res2.u)[2] for x in xs, y in ys]
+#    p_vals = [phi([x, y, t], res2.u)[3] for x in xs, y in ys]
+#    return u_vals, v_vals, p_vals
+#end
+#u_vals, v_vals, p_vals = predict_field(phi, res2, xs, ys, 0.5)
+#u_vals
+#v_vals
+#p_vals
+#
+## pressure
+#anim = @animate for t in ts
+#    u_vals, v_vals, p_vals = predict_field(phi, res, xs, ys, t)
+#    p_pred = reshape(p_vals, length(xs), length(ys))
+#    heatmap(
+#        xs, ys, p_pred',
+#        xlabel = "x", ylabel = "y",
+#        title = "Pressure at t = $(round(t, digits=2))",
+#        clims = (minimum(p_vals), maximum(p_vals)),
+#        c = :thermal, aspect_ratio = 1
+#    )
+#end
+#
+#gif(anim, "NeuralPDE/Navier_stokes_channel/navier_stokes_pressure_heatmap.gif", fps=5)
+#
+## u(x, y, t)
+#anim_u = @animate for t in ts
+#    u_vals, v_vals, p_vals = predict_field(phi, res, xs, ys, t)
+#    u_pred = reshape(u_vals, length(xs), length(ys))
+#    heatmap(xs, ys, u_pred',
+#        xlabel="x", ylabel="y",
+#        title="u-component Velocity at t = $(round(t, digits=2))",
+#        c=:blues, clims = (minimum(u_vals), maximum(u_vals)), size=(800, 600) 
+#    )  
+#end
+#
+#gif(anim_u, "NeuralPDE/Navier_stokes_channel/velocity_u_component_heatmap.gif", fps=1)
+#
+#
+## Surface Animation for u(x, y, t)
+#anim_u = @animate for t in ts
+#    u_vals, v_vals, p_vals = predict_field(phi, res, xs, ys, t)
+#    u_pred = reshape(u_vals, length(xs), length(ys))
+#    surface(xs, ys, u_pred',
+#        xlabel="x", ylabel="y", zlabel="u(x,y)",
+#        title="u-component Velocity at t = $(round(t, digits=2))",
+#        c=:blues, clims = (minimum(u_vals), maximum(u_vals)), size=(800, 600)
+#    )  
+#end
+#
+#gif(anim_u, "NeuralPDE/Navier_stokes_channel/velocity_u_component.gif", fps=1)
+#
+## v(x, y, t)
+#anim_u = @animate for t in ts
+#    u_vals, v_vals, p_vals = predict_field(phi, res, xs, ys, t)
+#    v_pred = reshape(v_vals, length(xs), length(ys))
+#    heatmap(xs, ys, v_pred',
+#        xlabel="x", ylabel="y",
+#        title="u-component Velocity at t = $(round(t, digits=2))",
+#        c=:blues, clims = (minimum(u_vals), maximum(u_vals)), size=(800, 600) 
+#    )  
+#end
+#
+#gif(anim_u, "NeuralPDE/Navier_stokes_channel/velocity_v_component_heatmap.gif", fps=1)
+#
+#
+## Surface Animation for v(x, y, t)
+#anim_u = @animate for t in ts
+#    u_vals, v_vals, p_vals = predict_field(phi, res, xs, ys, t)
+#    v_pred = reshape(v_vals, length(xs), length(ys))
+#    surface(xs, ys, v_pred',
+#        xlabel="x", ylabel="y", zlabel="u(x,y)",
+#        title="u-component Velocity at t = $(round(t, digits=2))",
+#        c=:blues, clims = (minimum(u_vals), maximum(u_vals)), size=(800, 600)
+#    )  
+#end
+#
+#gif(anim_u, "NeuralPDE/Navier_stokes_channel/velocity_v_component.gif", fps=1)
+#
+#
+##Surface Animation of Velocity Magnitude
+#function predict_velocity_magnitude(phi, res, xs, ys, t)
+#    [sqrt(phi([x, y, t], res.u)[1]^2 + phi([x, y, t], res.u)[2]^2) for x in xs, y in ys]
+#end
+#
+#anim_mag = @animate for t in ts
+#    mag = predict_velocity_magnitude(phi, res, xs, ys, t)
+#    mag_pred = reshape(mag, length(xs), length(ys))
+#    surface(xs, ys, mag_pred',
+#        xlabel="x", ylabel="y", zlabel="|u(x,y)|",
+#        title="Velocity Magnitude at t = $(round(t, digits=2))",
+#        c=:plasma, clims=(0, 1.5), size=(800, 600),
+#    )
+#end
+#
+#gif(anim_mag, "NeuralPDE/Navier_stokes_channel/velocity_surface.gif", fps=5)
+#
+## Quiver Plot Animation (Velocity Vector Field)
+#anim = @animate for t in ts
+#    u_vals, v_vals, p_vals = predict_field(phi, res, xs, ys, t)
+#    u_pred = reshape(u_vals, length(xs), length(ys))
+#    v_pred = reshape(v_vals, length(xs), length(ys))
+#    quiver(xs, ys, quiver=(u_pred', v_pred'),
+#        xlabel="x", ylabel="y",
+#        title="Velocity Field at t = $(round(t, digits=2))",
+#        aspect_ratio=1, linealpha=0.8, size=(700, 600)
+#    )
+#end
+#
+#gif(anim, "NeuralPDE/Navier_stokes_channel/velocity_quiver.gif", fps=1)
