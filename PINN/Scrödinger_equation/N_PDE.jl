@@ -103,7 +103,7 @@ end
 opt1 = OptimizationOptimisers.Adam(1e-3)
 res1 = Optimization.solve(prob, opt1; callback=callback, maxiters=100)
 
-res = Optimization.solve(optprob, Optim.BFGS(); callback=callback, maxiters=3000)
+res = Optimization.solve(optprob, Optim.BFGS(); callback=callback, maxiters=10000)
 
 plot(1:length(losses), losses, xlabel="Iteration", ylabel="Loss", title="Training Loss")
 
@@ -112,7 +112,7 @@ prob = remake(prob, u0 = res.u)
 global  iter = 0
 losses = Float64[]
 opt = OptimizationOptimJL.LBFGS()
-res = Optimization.solve(prob, opt; callback=callback, maxiters = 100)
+res = Optimization.solve(prob, opt; callback=callback, maxiters = 10000)
 
 plot(1:length(losses), losses, xlabel="Iteration", ylabel="Loss", title="Training Loss")
 

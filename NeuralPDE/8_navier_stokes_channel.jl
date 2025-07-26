@@ -2,70 +2,63 @@ using MethodOfLines, NeuralPDE, Lux, OptimizationOptimJL, ModelingToolkit, Domai
 using Plots, LineSearches, Optimisers
 using LuxCUDA, Random, ComponentArrays
 
-@parameters x y t
+@parameters x y
 @variables u(..) v(..) p(..)
 
 # Define the independent variable
-Dt = Differential(t)
 Dx = Differential(x)
 Dy = Differential(y)
 Dxx = Differential(x)^2
 Dyy = Differential(y)^2
-DxDy = Dx * Dy
 
-μ = 1.0
-ρ = 1.0
+ν = 0.01
 
 # Domain limits
-x_min = y_min = t_min = 0.0
-x_max = y_max = t_max = 1.0
+x_min = y_min = 0.0
+x_max = y_max = 1.0
 
 
 # PDE system
+#eqs = [
+#    ρ * Dt(u(x, y, t)) + ρ * (u(x, y, t) * Dx(u(x, y, t)) + v(x, y, t) * Dy(u(x, y, t))) - (μ * (2 * Dxx(u(x, y, t)) + Dyy(u(x, y, t)) + DxDy(v(x, y, t))) - Dx(p(x, y, t))) ~ 0, 
+#    ρ * Dt(v(x, y, t)) + ρ * (u(x, y, t) * Dx(v(x, y, t)) + v(x, y, t) * Dy(v(x, y, t))) - ((μ * (2 * Dxx(v(x, y, t)) + Dyy(v(x, y, t)) + DxDy(u(x, y, t))) - Dy(p(x, y, t)))) ~ 0, 
+#    Dx(u(x, y, t)) + Dy(v(x, y, t)) ~ 0
+#]
+
 eqs = [
-    ρ * Dt(u(x, y, t)) + ρ * (u(x, y, t) * Dx(u(x, y, t)) + v(x, y, t) * Dy(u(x, y, t))) - (μ * (2 * Dxx(u(x, y, t)) + Dyy(u(x, y, t)) + DxDy(v(x, y, t))) - Dx(p(x, y, t))) ~ 0, 
-    ρ * Dt(v(x, y, t)) + ρ * (u(x, y, t) * Dx(v(x, y, t)) + v(x, y, t) * Dy(v(x, y, t))) - ((μ * (2 * Dxx(v(x, y, t)) + Dyy(v(x, y, t)) + DxDy(u(x, y, t))) - Dy(p(x, y, t)))) ~ 0, 
-    Dx(u(x, y, t)) + Dy(v(x, y, t)) ~ 0
+    u(x, y) * Dx(u(x, y)) + v(x, y) * Dy(u(x, y)) - ν * (Dxx(u(x, y)) + Dyy(u(x, y))) + Dx(p(x, y)) ~ 0, 
+    u(x, y) * Dx(v(x, y)) + v(x, y) * Dy(v(x, y)) - ν * (Dxx(v(x, y)) + Dyy(v(x, y))) + Dy(p(x, y)) ~ 0, 
+    Dx(u(x, y)) + Dy(v(x, y)) ~ 0
 ]
 
 # Domains
 domains = [
     x ∈ Interval(x_min, x_max),
-    y ∈ Interval(y_min, y_max),
-    t ∈ Interval(t_min, t_max)
+    y ∈ Interval(y_min, y_max)
+    #t ∈ Interval(t_min, t_max)
 ]
 
-# Boundary Comditions
+# Boundary Conditions
 bcs = [
-    u(x, y, 0) ~ 0.0,
-    v(x, y, 0) ~ 0.0,
-    p(x, y, 0) ~ 0.0,
-
-    u(1, y, t) ~ 0.0,     
-    v(0, y, t) ~ 0.0,    
-
-    u(0, y, t) ~ 0.0,
-    v(1, y, t) ~ 0.0,
-    u(x, 0, t) ~ 0.0, v(x, 0, t) ~ 0.0, # No slip condition
-    u(x, 1, t) ~ 0.0, v(x, 1, t) ~ 0.0, # No slip condition
-
-    p(0, y, t) ~ 8.0,
-    p(1, y, t) ~ 0.0,
-
-    #p(x, 0, t) ~ 0.0,
-    #p(x, 1, t) ~ 0.0,
-    Dt(u(x, y, 0)) ~ 0.0
-
+    u(0, y) ~ 0.0,  u(1, y) ~ 0.0,  u(x, 0) ~ 0.0,  u(x, 1) ~ 1.0,  # Lid: U = 1
+    v(0, y) ~ 0.0,  v(1, y) ~ 0.0,  v(x, 0) ~ 0.0,  v(x, 1) ~ 0.0
 ]
 
 
-@named pdesys = PDESystem(eqs, bcs, domains, [x, y, t], [u(x, y, t), v(x, y, t), p(x, y, t)])
+@named pdesys = PDESystem(eqs, bcs, domains, [x, y], [u(x, y), v(x, y), p(x, y)])
 
 # Neural network
 chain = Chain(
-    Dense(3, 10, tanh),
-    Dense(10, 10, tanh),
-    Dense(10, 3)
+    Dense(2, 20, tanh),
+    Dense(20, 20, tanh),
+    Dense(20, 20, tanh),
+    Dense(20, 20, tanh),
+    Dense(20, 20, tanh),    
+    Dense(20, 20, tanh),
+    Dense(20, 20, tanh),
+    Dense(20, 20, tanh),
+    Dense(20, 20, tanh),
+    Dense(20, 2)
 )
 
 #chain = Chain(
@@ -77,11 +70,9 @@ chain = Chain(
 
 dx = 0.05
 dy = 0.05
-dt = 0.05
-
 
 #strategy = QuadratureTraining(; batch=200, abstol=1e-6, reltol=1e-6)
-strategy = GridTraining([dx, dy, dt])
+strategy = GridTraining([dx, dy])
 
 const gpud = gpu_device()
 ps = Lux.setup(Random.default_rng(), chain)[1]
@@ -103,8 +94,8 @@ opt = OptimizationOptimisers.ADAM(0.01)  # Initial LR
 #opt_state = OptimizationOptimisers.setup(opt, prob.f.f, prob.u0)
 
 maxiters = 100
-decay_every = 500
-decay_factor = 0.5
+#decay_every = 500
+#decay_factor = 0.5
 
 global iter = 0
 function scheduled_callback(p, loss)
